@@ -343,6 +343,17 @@ The poller now recovers from exactly that case, without guessing:
 - It is **conservative**: an opaque cursor this build cannot place, a cursor
   ahead of the tip, or a window that cannot be read is left untouched and the
   bounded RPC error is surfaced. Nothing is rewritten on a hunch.
+- A stale rejection immediately marks that target `cursorStale` in
+  `status.json` and `GET /health`, and makes readiness return `503` until that
+  target completes a successful scan. `/status` and `/health` identify whether
+  the cursor is unchanged or a retained-floor recovery is underway. The alert
+  is reconstructed after restart from the persisted rewind position or the
+  next RPC rejection; the version-1 cursor schema does not change.
+- Railway's configured `GET /health` deployment probe therefore remains
+  unready while a stale cursor is unresolved. Recovery continues in-process;
+  do not delete or replace the persistent cursor volume to force readiness.
+  `GET /health/live` stays `200` for supervisors that need process liveness
+  independently of readiness.
 - The miss is logged as a bounded ledger count (`cursor is N ledger(s) below the
   retained floor`), never as a raw RPC payload, and `/status` and `GET /health`
   expose `cursorRewinds` plus the per-target `rewindFromLedger` while it lasts.
@@ -661,8 +672,10 @@ cursors, whether a target has an error, automatic floor rewinds
 (`poller.cursorRewinds` plus each target's `rewindFromLedger`), and the chain
 clock (`poller.chainClockAt` plus `poller.chainClockSkewMs`, the signed difference
 in milliseconds between the bot's clock and the newest chain close time it has
-observed — positive while the bot is ahead). It never includes `BOT_TOKEN`, chat
-ids, private keys, or unbounded remote payloads.
+observed — positive while the bot is ahead). Each target's `cursorStale` boolean
+indicates an unresolved RPC rejection; resolving it requires a successful scan,
+not a health-probe retry or local cursor-age guess. It never includes
+`BOT_TOKEN`, chat ids, private keys, or unbounded remote payloads.
 
 ### Configuration provenance
 
@@ -719,12 +732,14 @@ Configuration (see `.env.example`):
 - `HEALTH_HOST` — bind address (default `127.0.0.1`; set to `0.0.0.0` for Docker)
 - `HEALTH_PORT` — TCP port (default `8787`; `0` disables)
 - `HEALTH_STALE_MS` — degraded if no successful poll within this window after the first success (default `90000`; `0` disables)
+- A stale cursor rejection independently makes `GET /health` return `503` until its target scans successfully; `HEALTH_STALE_MS` does not disable this cursor alert.
 - `STARTUP_HEALTH_DEADLINE_MS` — wall-clock budget for retrying the boot RPC `getHealth()` probe (default `30000`; `0` = single attempt)
 - `STARTUP_HEALTH_RETRY_MS` — delay between failed boot RPC health attempts (default `1000`)
 
 **Rollback:** set `HEALTH_PORT=0` (or omit the new env keys to keep defaults) and
-redeploy the previous image — the health module is additive and does not change
-cursor format or Telegram behaviour.
+redeploy the previous image — the target alert is additive, does not change the
+version-1 cursor format or Telegram delivery, and the previous build safely
+ignores the new status field.
 
 **Failure modes:** binding fails only if the port is already taken (process
 exits via the listen error path after logging). Client disconnects and probe
