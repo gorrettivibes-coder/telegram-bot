@@ -10,6 +10,7 @@ Operational guidance for recovering the Mimir Telegram notifier from missed noti
 * Cursors must only move according to the poller's existing persistence rules.
 * A shutdown flush may only persist cursors the poller already advanced; it never invents a resume position.
 * Logs and status output must not expose bot tokens, private keys, payment proofs, or unbounded remote payloads.
+  Scrubbing is centralized in `src/redact.ts` (regression suite: `tests/redaction.test.mjs`).
 
 Notification text from contract String fields is bounded to 200 Unicode code
 points before MarkdownV2 escaping. An oversized or malformed transaction hash
