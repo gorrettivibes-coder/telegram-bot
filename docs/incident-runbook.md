@@ -192,6 +192,42 @@ On a cold start, the poller begins from its configured lookback rather than repl
 
 Never replace a cursor with an arbitrary ledger or cursor value unless the repository's cursor format and retained-history requirements have been verified. `/pause` and `/resume` are safe alternatives because they leave the version-1 cursor file untouched.
 
+### Back up or restore a cursor
+
+Use the offline cursor CLI to preserve a valid reader position before a deploy
+or deliberate recovery. A backup can run while polling: cursor writes are
+atomic, so it captures either the prior or the newly committed complete file.
+Keep the backup on persistent storage and preferably outside the directory
+being replaced.
+
+```bash
+npm run cursor -- backup --out /safe-storage/cursor-before-recovery.json
+```
+
+Restore only after stopping the notifier. The command takes
+`INSTANCE_LOCK_FILE` (default `data/poller.lock`) for the duration of the
+atomic replacement, so it fails if a live bot owns the cursor. Existing cursor
+state is never replaced without `--force`:
+
+```bash
+npm run cursor -- restore --from /safe-storage/cursor-before-recovery.json --force
+```
+
+The backup must be valid version 1 or a supported legacy cursor file. Malformed
+or future-version backups are rejected without changing the live file. Legacy
+files are normalized to version 1 on restore, including their known dedup
+state. If restore reports a lock error, stop the owning process; only remove a
+leftover lock manually after verifying that no notifier is running. After
+restart, confirm `/status` shows the restored cursor and polling advances.
+
+Restoring reader state does not recover Telegram sends already dropped under
+normal lossy-delivery rules. It can replay events after the restored cursor or
+skip newer events if the backup is old; Stellar remains the source of truth.
+On Railway, run the command with the same persistent `/app/data` volume as the
+service, or mount the backup location separately. Keep the original cursor and
+backup until the restarted release is healthy so another restore or release
+rollback remains possible.
+
 ## Process restart
 
 ### Stopping the process

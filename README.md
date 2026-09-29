@@ -114,6 +114,8 @@ looks healthy but notifies nobody.
 | `/preview` | Previews channel notification formatting for `mimir-market` or `mimir-squad` without affecting cursors or poller state |
 | `/pause` | Operator only. Stops scheduling new poll cycles; a scan already in progress may finish and persist its normal cursor |
 | `/resume` | Operator only. Schedules the next poll cycle immediately, without changing or replaying cursors |
+| `npm run cursor -- backup` | Backs up the validated cursor file without contacting Stellar or Telegram |
+| `npm run cursor -- restore --from PATH` | Restores a validated backup while holding the poller lock; replacing an existing cursor requires `--force` |
 
 Commands from a user other than `OPERATOR_TELEGRAM_USER_ID` receive no control
 response and cannot mutate poller state — this includes `/audit`, whose report
@@ -169,6 +171,40 @@ npm start -- --status          # or: node dist/index.js --status
 `--status` reads the file only — it never contacts Telegram or the RPC — so it is
 safe to run from a health check or a cron job while the bot is running. It exits
 `0` when a snapshot was read and `1` when there is none or it is not valid JSON.
+
+## Cursor backup and restore
+
+The offline cursor command uses `CURSOR_FILE` from the environment or `.env`
+(default `data/cursor.json`). Backups default to a timestamped sibling file;
+choose another persistent location with `--out`. A backup is a point-in-time,
+byte-preserving copy of a supported current or legacy cursor file and does not
+pause polling. It is written atomically and is never overwritten unless
+`--force` is supplied. Run `npm run build` before using the command in a local
+checkout; the Docker image already includes the compiled CLI.
+
+```bash
+npm run cursor -- backup
+npm run cursor -- backup --out /safe-storage/cursor-before-deploy.json
+npm run cursor -- restore --from /safe-storage/cursor-before-deploy.json --force
+```
+
+Restore validates and normalizes the backup to the current version-1 cursor
+format, takes `INSTANCE_LOCK_FILE` (default `data/poller.lock`) to prevent the
+bot from starting or writing concurrently, and atomically replaces the live
+file. Stop the bot before restoring. A live process holding the lock makes the
+command fail; stale locks are handled by the same PID check used at startup.
+Restoring an existing cursor requires `--force`; malformed or future-version
+files are always rejected. The command prints only paths, schema version, and
+target count, never opaque cursor contents.
+
+Keep backups on persistent storage separate from the deployment's writable
+cursor when possible. On Railway, a one-off command must use the same attached
+`/app/data` volume (or an explicitly mounted backup location). The runtime
+Docker image contains the CLI through the normal TypeScript build. A rollback
+to an older bot release remains compatible with the version-1 cursor format;
+preserve the backup until the restored release has resumed polling. The chain
+remains the source of truth: a backup restores reader position and dedup state,
+not missed notifications or on-chain events.
 
 **What is deliberately not in it.** The snapshot is built from an allowlist of
 fields, so nothing can leak by accident. It never contains the bot token, a
